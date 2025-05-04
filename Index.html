@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval'">
+  <title>Beat the AI & Win Chess Challenge!</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/chessboardjs@1.0.0/www/css/chessboard-1.0.0.min.css" />
+  <style>
+    :root {
+      --primary: #00ff88;
+      --background: #1a1a1a;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: var(--background);
+      color: #fff;
+      text-align: center;
+      padding: 1rem;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #board {
+      width: 90vw;
+      max-width: 500px;
+      min-width: 300px;
+      margin: 1rem auto;
+      touch-action: none;
+    }
+
+    .btn {
+      background: var(--primary);
+      padding: 1rem 2rem;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      color: #000;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin: 0.5rem;
+    }
+
+    .btn:active {
+      transform: scale(0.95);
+    }
+
+    .game-alert {
+      display: none;
+      margin-top: 2rem;
+      padding: 1rem;
+      background: #2a2a2a;
+      border-radius: 12px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    #timer {
+      font-size: 1.4rem;
+      margin: 1rem 0;
+      color: var(--primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #loading {
+      display: none;
+      color: var(--primary);
+      font-style: italic;
+      margin: 1rem 0;
+    }
+
+    #promotion-modal {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #333;
+      padding: 1rem;
+      border-radius: 8px;
+      z-index: 1000;
+    }
+
+    .promotion-piece {
+      width: 50px;
+      height: 50px;
+      margin: 0.5rem;
+      cursor: pointer;
+      background-size: cover;
+    }
+  </style>
+</head>
+<body>
+  <h1>🏆 Beat Chess AI in 5 Minutes & Win! 🏆</h1>
+  <p>Checkmate the AI to claim your reward!</p>
+  
+  <div id="timer">⏳ Time Left: <span id="time">05:00</span></div>
+  <div id="loading">AI is thinking...</div>
+  <div id="board"></div>
+
+  <div id="promotion-modal">
+    <div class="promotion-piece" data-piece="q"></div>
+    <div class="promotion-piece" data-piece="r"></div>
+    <div class="promotion-piece" data-piece="b"></div>
+    <div class="promotion-piece" data-piece="n"></div>
+  </div>
+
+  <div class="game-alert" id="reward">
+    <h2>🎉 Victory! 🎉</h2>
+    <p>You've outsmarted the AI!</p>
+    <button class="btn" onclick="claimReward()">Claim Your Prize</button>
+  </div>
+
+  <div class="game-alert" id="loss">
+    <h2>😞 Defeat 😞</h2>
+    <p>The AI was too strong this time!</p>
+    <button class="btn" onclick="resetGame()">Try Again</button>
+  </div>
+
+  <div class="game-alert" id="timeout">
+    <h2>⏰ Time's Up!</h2>
+    <p>Quick! Try again faster!</p>
+    <button class="btn" onclick="resetGame()">Restart Game</button>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
+  <script src="https://unpkg.com/chessboardjs@1.0.0/www/js/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stockfish/stockfish.js"></script>
+  <script>
+    const game = new Chess();
+    const stockfish = new Worker("https://cdn.jsdelivr.net/npm/stockfish/stockfish.js");
+    let isGameOver = false;
+    let timer;
+    let timerPaused = false;
+    let time = 300;
+    let pendingPromotion = null;
+
+    const board = Chessboard('board', {
+      showNotation: true,
+      draggable: true,
+      position: 'start',
+      moveSpeed: 'fast',
+      snapbackSpeed: 100,
+      snapSpeed: 100,
+      onDrop: handleMove,
+      onDragStart: handleDragStart,
+      orientation: 'white'
+    });
+
+    function handleDragStart(source, piece) {
+      if (isGameOver || game.turn() !== 'w' || !piece.startsWith('w')) {
+        return false;
+      }
+    }
+
+    function handleMove(source, target) {
+      if (isGameOver || game.turn() !== 'w') return 'snapback';
+
+      const move = game.move({
+        from: source,
+        to: target,
+        promotion: 'q'
+      });
+
+      if (move === null) return 'snapback';
+
+      if (move.promotion) {
+        pendingPromotion = { source, target };
+        showPromotionModal();
+        return 'snapback';
+      }
+
+      postMoveActions();
+    }
+
+    function showPromotionModal() {
+      document.getElementById('promotion-modal').style.display = 'flex';
+      Array.from(document.getElementsByClassName('promotion-piece')).forEach((el, i) => {
+        el.style.backgroundImage = `url(https://unpkg.com/chessboardjs@1.0.0/www/img/chesspieces/w${['Q','R','B','N'][i]}.png)`;
+      });
+    }
+
+    function handlePromotion(piece) {
+      game.move({
+        from: pendingPromotion.source,
+        to: pendingPromotion.target,
+        promotion: piece
+      });
+      pendingPromotion = null;
+      document.getElementById('promotion-modal').style.display = 'none';
+      postMoveActions();
+    }
+
+    function postMoveActions() {
+      updateBoard();
+      checkGameEnd();
+      if (!isGameOver) {
+        timerPaused = true;
+        document.getElementById('loading').style.display = 'block';
+        setTimeout(makeAIMove, 500);
+      }
+    }
+
+    function makeAIMove() {
+      stockfish.postMessage(`position fen ${game.fen()}`);
+      stockfish.postMessage('go movetime 1500');
+
+      stockfish.onmessage = (event) => {
+        if (typeof event.data !== 'string') return;
+        
+        if (event.data.startsWith('bestmove')) {
+          const bestMove = event.data.split(' ')[1];
+          if (bestMove && game.move(bestMove)) {
+            updateBoard();
+            checkGameEnd();
+          }
+          timerPaused = false;
+          document.getElementById('loading').style.display = 'none';
+        }
+      };
+    }
+
+    function checkGameEnd() {
+      if (game.is_checkmate()) {
+        endGame(game.turn() === 'b');
+      } else if (game.is_draw() || game.is_stalemate() || 
+                 game.is_threefold_repetition() || game.is_insufficient_material()) {
+        endGame('draw');
+      }
+    }
+
+    function endGame(result) {
+      clearInterval(timer);
+      isGameOver = true;
+      stockfish.postMessage('stop');
+      stockfish.terminate();
+
+      document.querySelectorAll('.game-alert').forEach(el => el.style.display = 'none');
+      
+      if (result === true) {
+        document.getElementById('reward').style.display = 'block';
+      } else if (result === 'draw') {
+        document.getElementById('loss').innerHTML = `
+          <h2>🤝 Draw! 🤝</h2>
+          <p>It's a tie! Try again!</p>
+        `;
+        document.getElementById('loss').style.display = 'block';
+      } else {
+        document.getElementById('loss').style.display = 'block';
+      }
+    }
+
+    function startTimer() {
+      timer = setInterval(() => {
+        if (!timerPaused) time--;
+        const minutes = String(Math.floor(time / 60)).padStart(2, '0');
+        const seconds = String(time % 60).padStart(2, '0');
+        document.getElementById('time').textContent = `${minutes}:${seconds}`;
+        
+        if (time <= 0) {
+          clearInterval(timer);
+          document.getElementById('timeout').style.display = 'block';
+          endGame();
+        }
+      }, 1000);
+    }
+
+    function resetGame() {
+      game.reset();
+      board.start();
+      isGameOver = false;
+      time = 300;
+      timerPaused = false;
+      document.querySelectorAll('.game-alert').forEach(el => el.style.display = 'none');
+      document.getElementById('time').textContent = '05:00';
+      stockfish.terminate();
+      startTimer();
+    }
+
+    function claimReward() {
+      window.location.href = 'YOUR_CPA_LINK_HERE';
+    }
+
+    document.getElementById('promotion-modal').addEventListener('click', (e) => {
+      if (e.target.classList.contains('promotion-piece')) {
+        handlePromotion(e.target.dataset.piece);
+      }
+    });
+
+    startTimer();
+  </script>
+</body>
+</html>
